@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <div align="center">
 
 ![logo](./images/logo.png)
@@ -1354,3 +1355,6 @@ MiniMind模型本身预训练数据集小的可怜，也没有针对性的对测
 This repository is licensed under the [Apache-2.0 License](LICENSE).
 
 
+=======
+# LearningMiniMind
+>>>>>>> a8df5465992cd130900b2bcdd6b7ed5dac5cae5f
