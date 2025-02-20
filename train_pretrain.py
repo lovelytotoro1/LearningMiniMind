@@ -39,10 +39,15 @@ def train_epoch(epoch, wandb):
         Y = Y.to(args.device)
         loss_mask = loss_mask.to(args.device)
 
-        lr = get_lr(epoch * iter_per_epoch + step, args.epochs * iter_per_epoch, args.learning_rate)
-        for param_group in optimizer.param_groups:
+        lr = get_lr(epoch * iter_per_epoch + step, args.epochs * iter_per_epoch, args.learning_rate)  # 获取当前学习率
+        for param_group in optimizer.param_groups:   # 修正学习率
             param_group['lr'] = lr
-
+        """
+        在这里，with ctx: 会根据 ctx 的值（nullcontext() 或 torch.cuda.amp.autocast()）控制以下代码块的执行方式：
+        如果使用 nullcontext()（即设备是 CPU），with 语句不会做任何特殊操作，代码就像普通的 Python 代码一样执行。
+        如果使用 torch.cuda.amp.autocast()（即设备是 GPU），则启用混合精度训练。这会自动将某些操作（如矩阵乘法、卷积等）
+        转换为更高效的低精度计算（如 FP16），以提高训练效率和节省内存，同时尽量不影响模型的准确性。
+        """
         with ctx:
             res = model(X)
             loss = loss_fct(
@@ -53,7 +58,7 @@ def train_epoch(epoch, wandb):
             loss += res.aux_loss
             loss = loss / args.accumulation_steps
 
-        scaler.scale(loss).backward()
+        scaler.scale(loss).backward()  # 混合精度优化，然后反向
 
         if (step + 1) % args.accumulation_steps == 0:
             scaler.unscale_(optimizer)
@@ -96,8 +101,10 @@ def train_epoch(epoch, wandb):
 
 
 def init_model(lm_config):
-    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
-    model = MiniMindLM(lm_config).to(args.device)
+    # 模型初始化
+    tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')  # 加载分词器
+    model = MiniMindLM(lm_config).to(args.device)  # 创建网络
+    # .numel函数用于获取 Tensor 中的数据量
     Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     return model, tokenizer
 
@@ -138,9 +145,10 @@ if __name__ == "__main__":
     parser.add_argument('--n_layers', default=8, type=int)
     parser.add_argument('--max_seq_len', default=512, type=int)
     parser.add_argument('--use_moe', default=False, type=bool)
-    parser.add_argument("--data_path", type=str, default="./dataset/pretrain_hq.jsonl")
+    parser.add_argument("--data_path", type=str, default="../datasets/minimind_dataset/pretrain_hq.jsonl")
     args = parser.parse_args()
 
+    # 添加 Minimind 网络的详细配置文件
     lm_config = LMConfig(dim=args.dim, n_layers=args.n_layers, max_seq_len=args.max_seq_len, use_moe=args.use_moe)
     args.save_dir = os.path.join(args.out_dir)
     os.makedirs(args.save_dir, exist_ok=True)
@@ -151,6 +159,11 @@ if __name__ == "__main__":
 
     args.wandb_run_name = f"MiniMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
 
+    """
+        nullcontext 是 Python 标准库 contextlib 中的一个上下文管理器。它的作用是提供一个“空”的上下文管理器，
+        即在 with 语句中使用时，它不会执行任何操作。这在某些情况下非常有用，特别是当你需要一个上下文管理器，
+        但不需要它执行任何实际的操作时。
+    """
     ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast()
 
     ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
@@ -167,7 +180,16 @@ if __name__ == "__main__":
     else:
         wandb = None
 
+    """
+        模型初始化，主要分为两个
+        1、tokenizer：分词器，不同的数据要先训练，不过也可以采用网上的分词器，需要注意的是词的数量
+        2、语言模型：通过LMConfig进行配置
+    """
     model, tokenizer = init_model(lm_config)
+
+    """
+        数据加载
+    """
     train_ds = PretrainDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if ddp else None
     train_loader = DataLoader(
@@ -180,8 +202,8 @@ if __name__ == "__main__":
         sampler=train_sampler
     )
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
-    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
+    scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))  # 混合精度
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)  # 全参训练
 
     if ddp:
         model._ddp_params_and_buffers_to_ignore = {"pos_cis"}

@@ -24,7 +24,7 @@ class PretrainDataset(Dataset):
         samples = []
         with open(path, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
-                data = json.loads(line.strip())
+                data = json.loads(line.strip())  # 读取所有的文本行，并去除首尾空格
                 samples.append(data)
         return samples
 
@@ -35,19 +35,42 @@ class PretrainDataset(Dataset):
         sample = self.samples[index]
 
         # 构建输入文本
-        text = f"{self.tokenizer.bos_token}{str(sample['text'])}{self.tokenizer.eos_token}"
+        text = f"{self.tokenizer.bos_token}{str(sample['text'])}{self.tokenizer.eos_token}"  # 在每一行之前添加开始与结束符号
         encoding = self.tokenizer(
             text,
             max_length=self.max_length,
             padding='max_length',
             truncation=True,
             return_tensors='pt'
-        )
+        )  # 对文本向量进行编码, 值得注意的是如果超过最大长度应该怎么处理，截断吗？
+        """
+            当你使用 tokenizer 对文本进行处理时，如果输入文本的长度超出了 `max_length`，通常会发生以下几种情况，取决于你设置的参数：
+            1. **截断（Truncation）**：  
+            如果你启用了 `truncation=True`，tokenizer 会自动截断输入文本，使其长度不超过 `max_length`。截断的方式通常是从文本的开头或结尾去掉部分 token（具体行为取决于 tokenizer 配置）。  
+            例如，`max_length=512` 时，如果输入文本的 token 数超过 512，超出的部分会被去掉。
+
+            2. **填充（Padding）**：  
+            如果启用了 `padding=True`，tokenizer 会对较短的输入进行填充，确保所有文本的长度一致。如果你设置了 `max_length`，那么 tokenizer 会将短于 `max_length` 的文本填充到指定长度。
+
+            3. **错误处理**：  
+            如果没有启用截断，并且文本超出了 `max_length`，tokenizer 会报错或者返回原始文本，具体行为取决于框架和库的实现。
+
+            例如，使用 `transformers` 库时，可以像这样进行设置：
+            ```python
+            encoded = tokenizer(text, padding=True, truncation=True, max_length=512)
+            ```
+
+            这样，无论输入文本多长，它都会被自动截断到 512 长度，并在需要时填充至该长度。
+
+            当 padding=True 时，tokenizer 会根据设置的 max_length 或默认的最长序列长度来填充文本，确保所有的输入序列在批处理时具有相同的长度。
+            填充的方式通常是将特殊的填充标记（[PAD]）添加到序列的末尾，或者在某些情况下，填充到序列的开头。
+        """
+
         input_ids = encoding.input_ids.squeeze()
         loss_mask = (input_ids != self.tokenizer.pad_token_id)
 
         X = torch.tensor(input_ids[:-1], dtype=torch.long)
-        Y = torch.tensor(input_ids[1:], dtype=torch.long)
+        Y = torch.tensor(input_ids[1:], dtype=torch.long)  # 预测这段话最后一个词
         loss_mask = torch.tensor(loss_mask[1:], dtype=torch.long)
         return X, Y, loss_mask
 

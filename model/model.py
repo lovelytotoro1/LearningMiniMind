@@ -13,6 +13,15 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 
+
+"""
+RMSNorm 的优点
+计算高效：RMSNorm 相比 LayerNorm 不需要计算均值，减少了计算复杂度，尤其是在高维特征的情况下。
+更少的偏差：由于没有均值的偏移，RMSNorm 可能在某些模型中能够表现得更为简洁，并且能够避免 LayerNorm 中的平均值偏移问题。
+适用性强：RMSNorm 尤其适用于处理输入特征维度较大的任务，如自然语言处理中的 Transformer 模型。
+
+torch.rsqrt 表示为计算平方根的倒数
+"""
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float):
         super().__init__()
@@ -91,7 +100,7 @@ class Attention(nn.Module):
         xq = xq.view(bsz, seq_len, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seq_len, self.n_local_kv_heads, self.head_dim)
         xv = xv.view(bsz, seq_len, self.n_local_kv_heads, self.head_dim)
-
+        # 对q、k增加旋转位置编码， 啊？？？因为当前的输入没看到过，而只给qk做位置编码是因为要进行自注意力机制的计算
         xq, xk = apply_rotary_emb(xq, xk, pos_cis)
         # kv_cache实现
         if past_key_value is not None:
@@ -106,7 +115,7 @@ class Attention(nn.Module):
         )
         if self.flash and seq_len != 1:
             dropout_p = self.dropout if self.training else 0.0
-            output = F.scaled_dot_product_attention(
+            output = F.scaled_dot_product_attention(  # 使用底层实现的 scaled_dot_product_attention，应该是附带了加速
                 xq, xk, xv,
                 attn_mask=None,
                 dropout_p=dropout_p,
@@ -137,6 +146,8 @@ class FeedForward(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
+        # F.silu 是 PyTorch 中的一个激活函数，它是 Sigmoid Linear Unit (SiLU) 的简称，也常被称为 Swish。
+        # 其实是 F.silu(x) = x * F.sigmoid(x)
         return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
 
 
@@ -169,9 +180,9 @@ class MoEGate(nn.Module):
         else:
             raise NotImplementedError(f'insupportable scoring function for MoE gating: {self.scoring_func}')
 
-        topk_weight, topk_idx = torch.topk(scores, k=self.top_k, dim=-1, sorted=False)
+        topk_weight, topk_idx = torch.topk(scores, k=self.top_k, dim=-1, sorted=False)  # 选取前 k 个权重
 
-        if self.top_k > 1 and self.norm_topk_prob:
+        if self.top_k > 1 and self.norm_topk_prob:  # 权重归一化
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
 
@@ -180,12 +191,25 @@ class MoEGate(nn.Module):
             aux_topk = self.top_k
             topk_idx_for_aux_loss = topk_idx.view(bsz, -1)
             if self.seq_aux:
-                scores_for_seq_aux = scores_for_aux.view(bsz, seq_len, -1)
-                ce = torch.zeros(bsz, self.n_routed_experts, device=hidden_states.device)
+                """
+                    专家路由的辅助损失
+                        负载均衡（Load Balancing）：通过惩罚激活频率偏离期望值的专家，确保所有专家被均衡利用。
+                        防止模式坍塌：避免某些专家因过度激活而主导模型，其他专家未被训练。
+                    类比与参考
+                        此方法与 Switch Transformer 中的辅助损失类似：
+                        aux_loss=α⋅专家激活频率的交叉熵
+                        其中，Alpha 是平衡主任务损失与辅助损失的系数。
+                """
+                scores_for_seq_aux = scores_for_aux.view(bsz, seq_len, -1)  # 调整张量形状，将专家路由的得分（如注意力分数或门控分数）转换为形状 (batch_size, seq_len, ...)。
+                ce = torch.zeros(bsz, self.n_routed_experts, device=hidden_states.device)  # 初始化一个全零张量 ce，用于统计每个专家被选中的频率。
                 ce.scatter_add_(1, topk_idx_for_aux_loss,
                                 torch.ones(bsz, seq_len * aux_topk, device=hidden_states.device)).div_(
                     seq_len * aux_topk / self.n_routed_experts)
+                # 统计每个专家被选中的次数。
                 aux_loss = (ce * scores_for_seq_aux.mean(dim=1)).sum(dim=1).mean() * self.alpha
+                # 计算最终的辅助损失
+
+                # aux 要变小的话，需要 专家被选中的次数变低的同时，该专家的得分也变低，因此作为损失相当于是抑制
             else:
                 mask_ce = F.one_hot(topk_idx_for_aux_loss.view(-1), num_classes=self.n_routed_experts)
                 ce = mask_ce.float().mean(0)
@@ -196,7 +220,9 @@ class MoEGate(nn.Module):
             aux_loss = 0
         return topk_idx, topk_weight, aux_loss
 
-
+"""
+    MoE
+"""
 class MOEFeedForward(nn.Module):
     def __init__(self, config: LMConfig):
         super().__init__()
@@ -263,7 +289,7 @@ class MiniMindBlock(nn.Module):
         self.n_heads = config.n_heads
         self.dim = config.dim
         self.head_dim = config.dim // config.n_heads
-        self.attention = Attention(config)
+        self.attention = Attention(config)  # Attention
 
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(config.dim, eps=config.norm_eps)
@@ -305,19 +331,23 @@ class MiniMindLM(PreTrainedModel):
                 past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
                 use_cache: bool = False,
                 **args):
+        """
+            这个变量通常用于存储 Transformer 模型中 自注意力（Self-Attention）机制的历史键值对。在使用 Transformer 模型进行推理时，
+            尤其是在处理序列数据时，模型会使用先前的隐藏状态（键值对）来加速计算。如果 past_key_values 为 None，表示没有历史键值，可能是模型第一次处理输入数据。
+        """
         past_key_values = past_key_values or [None] * len(self.layers)
-        start_pos = args.get('start_pos', 0)
-        h = self.dropout(self.tok_embeddings(input_ids))
-        pos_cis = self.pos_cis[start_pos:start_pos + input_ids.size(1)]
+        start_pos = args.get('start_pos', 0)  # 默认为0
+        h = self.dropout(self.tok_embeddings(input_ids))  # 对输入进行embedding, 以及随机dropout, 默认为0
+        pos_cis = self.pos_cis[start_pos:start_pos + input_ids.size(1)]  # 取该部分位置的位置编码
         past_kvs = []
         for l, layer in enumerate(self.layers):
             h, past_kv = layer(
-                h, pos_cis,
+                h, pos_cis,  # h 为输入，pos_cis为位置编码，计算得到新的值以及新的kv值
                 past_key_value=past_key_values[l],
                 use_cache=use_cache
             )
-            past_kvs.append(past_kv)
-        logits = self.output(self.norm(h))
+            past_kvs.append(past_kv)  # 添加当前层的kv
+        logits = self.output(self.norm(h))  # 一般norm不会使用同一个
         aux_loss = sum(l.feed_forward.aux_loss for l in self.layers if isinstance(l.feed_forward, MOEFeedForward))
         self.OUT.__setitem__('logits', logits)
         self.OUT.__setitem__('aux_loss', aux_loss)
