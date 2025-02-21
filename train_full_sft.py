@@ -120,10 +120,20 @@ def init_distributed_mode():
 
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser(description="MiniMind Full SFT")
     parser.add_argument("--out_dir", type=str, default="out")
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=1)  # 怎么只有一个epoch
+    """
+    语言模型（如GPT系列）的全监督微调（fine-tuning）所需的epoch数量通常取决于多个因素，包括数据集的大小、模型的规模、学习率、批次大小等。
+    数据集大小：如果你的数据集相对较小，可能只需要几轮训练（比如5-10个epoch）就能得到较好的效果；如果数据集很大，可能需要更多的epoch来充分学习。
+    学习率：较高的学习率可能导致模型过早收敛，需要较少的epoch；较低的学习率则可能需要更多的epoch。
+    模型规模：较大的预训练模型可能不需要太多的epoch就能从数据中捕捉到有用的信息，但它们通常也需要更多的计算资源。
+    过拟合问题：对于较小的训练集，训练太多的epoch可能会导致过拟合，这时可以通过早停（early stopping）来避免。
+    通常情况下，很多研究和实践中的经验值是在微调时使用大约 3到5个epoch，特别是在一个中等大小的数据集上。但对于一些大规模数据集，可能需要 10个epoch 或更多，或者采用 逐步训练 的策略。
+    """
+
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--learning_rate", type=float, default=5e-5)
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--dtype", type=str, default="bfloat16")
@@ -141,7 +151,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_layers', default=8, type=int)
     parser.add_argument('--max_seq_len', default=512, type=int)
     parser.add_argument('--use_moe', default=False, type=bool)
-    parser.add_argument("--data_path", type=str, default="./dataset/sft_mini_512.jsonl")
+    parser.add_argument("--data_path", type=str, default="../datasets/minimind_dataset/sft_mini_512.jsonl")
 
     args = parser.parse_args()
 
@@ -169,9 +179,9 @@ if __name__ == "__main__":
     else:
         wandb = None
 
-    model, tokenizer = init_model(lm_config)
+    model, tokenizer = init_model(lm_config)  # 与pretrain.py中的init_model函数相同, 语言模型初始化换成了Pretrain的模型
 
-    train_ds = SFTDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)
+    train_ds = SFTDataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)  # 返回结构化的聊天数据，ChatML格式
     train_sampler = DistributedSampler(train_ds) if ddp else None
     train_loader = DataLoader(
         train_ds,
@@ -186,6 +196,15 @@ if __name__ == "__main__":
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype in ['float16', 'bfloat16']))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
+    """
+        _ddp_params_and_buffers_to_ignore 是 PyTorch 中与 Distributed Data Parallel (DDP) 相关的一个内部机制，用于指定在进行模型的分布式训练时，哪些模型参数或缓存（buffers）不参与 DDP 的通信过程。
+        在分布式训练中，DDP 会自动同步不同计算设备（例如多张 GPU）上的梯度和模型参数。但是，有时我们可能希望在某些情况下，忽略某些不需要同步的参数或缓冲区。
+        这个功能通常用于以下几种情况：
+        冻结某些层的参数：例如，如果你只想训练部分网络层，或者在迁移学习中只训练新加入的层，可以使用这个机制来忽略其他层的参数。
+        不需要同步的缓冲区：有些参数或缓冲区（如 batch normalization 的 running mean 和 running variance）可能不需要每个设备之间的同步。
+        PyTorch 在进行分布式训练时，会默认同步模型的所有可训练参数，但你可以通过 _ddp_params_and_buffers_to_ignore 来指定某些不参与同步的参数或缓存。
+        不过，_ddp_params_and_buffers_to_ignore 是一个内部机制，通常用户不需要手动使用它，除非你在进行一些非常具体的定制操作。
+    """
     if ddp:
         model._ddp_params_and_buffers_to_ignore = {"pos_cis"}
         model = DistributedDataParallel(model, device_ids=[ddp_local_rank])

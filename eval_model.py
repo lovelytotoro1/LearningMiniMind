@@ -14,7 +14,7 @@ warnings.filterwarnings('ignore')
 
 def init_model(args):
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
-    if args.load == 0:
+    if args.load == 0:  # lora微调
         moe_path = '_moe' if args.use_moe else ''
         modes = {0: 'pretrain', 1: 'full_sft', 2: 'rlhf', 3: 'reason'}
         ckp = f'./{args.out_dir}/{modes[args.model_mode]}_{args.dim}{moe_path}.pth'
@@ -30,7 +30,7 @@ def init_model(args):
         model.load_state_dict({k: v for k, v in state_dict.items() if 'mask' not in k}, strict=True)
 
         if args.lora_name != 'None':
-            apply_lora(model)
+            apply_lora(model)  # 将所有的 Linear 更改为 lora_linear结构
             load_lora(model, f'./{args.out_dir}/lora/{args.lora_name}_{args.dim}.pth')
     else:
         transformers_model_path = './MiniMind2'
@@ -126,28 +126,32 @@ def main():
                         help="0: 预训练模型，1: SFT-Chat模型，2: RLHF-Chat模型，3: Reason模型")
     args = parser.parse_args()
 
-    model, tokenizer = init_model(args)
+    model, tokenizer = init_model(args)  # 模型初始化
 
     prompts = get_prompt_datas(args)
     test_mode = int(input('[0] 自动测试\n[1] 手动输入\n'))
     messages = []
     for idx, prompt in enumerate(prompts if test_mode == 0 else iter(lambda: input('👶: '), '')):
+        """
+            固定随机种子可以复现结果
+        """
         setup_seed(random.randint(0, 2048))
         # setup_seed(2025)  # 如需固定每次输出则换成【固定】的随机种子
         if test_mode == 0: print(f'👶: {prompt}')
 
-        messages = messages[-args.history_cnt:] if args.history_cnt else []
-        messages.append({"role": "user", "content": prompt})
+        messages = messages[-args.history_cnt:] if args.history_cnt else []  # 携带上下文信息
+        messages.append({"role": "user", "content": prompt})  # 用户问题
 
         new_prompt = tokenizer.apply_chat_template(
             messages,
-            tokenize=False,
+            tokenize=False,  # 是否进行tokenize, False表示为字符串
             add_generation_prompt=True
-        )[-args.max_seq_len + 1:] if args.model_mode != 0 else (tokenizer.bos_token + prompt)
+        )[-args.max_seq_len + 1:] if args.model_mode != 0 else (tokenizer.bos_token + prompt) 
+        # 预训练模型直接从后往前截取Max_sqe_len的信息长度
 
         answer = new_prompt
         with torch.no_grad():
-            x = torch.tensor(tokenizer(new_prompt)['input_ids'], device=args.device).unsqueeze(0)
+            x = torch.tensor(tokenizer(new_prompt)['input_ids'], device=args.device).unsqueeze(0)# 
             outputs = model.generate(
                 x,
                 eos_token_id=tokenizer.eos_token_id,
@@ -156,7 +160,7 @@ def main():
                 top_p=args.top_p,
                 stream=True,
                 pad_token_id=tokenizer.pad_token_id
-            )
+            )  # 生成对话
 
             print('🤖️: ', end='')
             try:

@@ -43,8 +43,8 @@ def logits_to_probs(logits, labels):
 def dpo_loss(ref_probs, probs, beta):
     # ref_probs 和 probs 都是 shape: (batch_size, seq_len)
     # 计算每个样本的平均概率
-    ref_probs = ref_probs.mean(dim=1)
-    probs = probs.mean(dim=1)
+    ref_probs = ref_probs.mean(dim=1)  # 参考模型的输出
+    probs = probs.mean(dim=1)  # 更新的模型的输出
 
     # 将 chosen 和 rejected 数据分开
     batch_size = ref_probs.shape[0]
@@ -53,10 +53,10 @@ def dpo_loss(ref_probs, probs, beta):
     chosen_probs = probs[:batch_size // 2]
     reject_probs = probs[batch_size // 2:]
 
-    pi_logratios = chosen_probs - reject_probs
-    ref_logratios = chosen_ref_probs - reject_ref_probs
-    logits = pi_logratios - ref_logratios
-    loss = -F.logsigmoid(beta * logits)
+    pi_logratios = chosen_probs - reject_probs  # 更新的模型的偏好 与 非偏好 的概率差
+    ref_logratios = chosen_ref_probs - reject_ref_probs  # 参考模型的偏好 与 非偏好 的概率差
+    logits = pi_logratios - ref_logratios  # 计算两者的差异
+    loss = -F.logsigmoid(beta * logits)  # 求NLL损失
     return loss.mean()
 
 
@@ -81,13 +81,13 @@ def train_epoch(epoch, wandb):
             with torch.no_grad():
                 ref_outputs = ref_model(x)
                 ref_logits = ref_outputs.logits
-            ref_probs = logits_to_probs(ref_logits, y)
+            ref_probs = logits_to_probs(ref_logits, y)  # ref模型的NLL
             ref_probs = ref_probs * mask
-            outputs = model(x)
+            outputs = model(x)  # sft模型的输出
             logits = outputs.logits
-            probs = logits_to_probs(logits, y)
+            probs = logits_to_probs(logits, y)  # 需要更新的模型的NLL
             probs = probs * mask
-            loss = dpo_loss(ref_probs, probs, beta=0.1)
+            loss = dpo_loss(ref_probs, probs, beta=0.1)  # 计算DPO损失
             loss = loss / args.accumulation_steps
 
         scaler.scale(loss).backward()
@@ -185,7 +185,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_layers', default=8, type=int)
     parser.add_argument('--max_seq_len', default=3000, type=int)
     parser.add_argument('--use_moe', default=False, type=bool)
-    parser.add_argument("--data_path", type=str, default="./dataset/dpo.jsonl")
+    parser.add_argument("--data_path", type=str, default="../datasets/minimind_dataset/dpo.jsonl")
 
     args = parser.parse_args()
 
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     else:
         wandb = None
 
-    model, ref_model, tokenizer = init_model(lm_config)
+    model, ref_model, tokenizer = init_model(lm_config)  # sft模型，ref模型(初始等于sft模型)，tokenizer
 
     train_ds = DPODataset(args.data_path, tokenizer, max_length=lm_config.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if ddp else None

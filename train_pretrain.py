@@ -43,10 +43,10 @@ def train_epoch(epoch, wandb):
         for param_group in optimizer.param_groups:   # 修正学习率
             param_group['lr'] = lr
         """
-        在这里，with ctx: 会根据 ctx 的值（nullcontext() 或 torch.cuda.amp.autocast()）控制以下代码块的执行方式：
-        如果使用 nullcontext()（即设备是 CPU），with 语句不会做任何特殊操作，代码就像普通的 Python 代码一样执行。
-        如果使用 torch.cuda.amp.autocast()（即设备是 GPU），则启用混合精度训练。这会自动将某些操作（如矩阵乘法、卷积等）
-        转换为更高效的低精度计算（如 FP16），以提高训练效率和节省内存，同时尽量不影响模型的准确性。
+            在这里，with ctx: 会根据 ctx 的值（nullcontext() 或 torch.cuda.amp.autocast()）控制以下代码块的执行方式：
+            如果使用 nullcontext()（即设备是 CPU），with 语句不会做任何特殊操作，代码就像普通的 Python 代码一样执行。
+            如果使用 torch.cuda.amp.autocast()（即设备是 GPU），则启用混合精度训练。这会自动将某些操作（如矩阵乘法、卷积等）
+            转换为更高效的低精度计算（如 FP16），以提高训练效率和节省内存，同时尽量不影响模型的准确性。
         """
         with ctx:
             res = model(X)

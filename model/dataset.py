@@ -81,8 +81,8 @@ class SFTDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.samples = self.load_data(jsonl_path)
-        self.bos_id = tokenizer('<s>assistant\n', add_special_tokens=False).input_ids
-        self.eos_id = tokenizer('</s>\n', add_special_tokens=False).input_ids
+        self.bos_id = tokenizer('<s>assistant\n', add_special_tokens=False).input_ids  # 开始符号
+        self.eos_id = tokenizer('</s>\n', add_special_tokens=False).input_ids  # 结束符号
 
     def __len__(self):
         return len(self.samples)
@@ -96,7 +96,68 @@ class SFTDataset(Dataset):
         return samples
 
     def _create_chat_prompt(self, conversations):
-        """构建符合ChatML格式的对话"""
+        """
+            构建符合ChatML格式的对话
+            ChatML（Chat Markup Language）是一种用于结构化聊天内容的标记语言，通常用于定义聊天机器人与用户之间的对话格式。
+            它可以帮助开发者更清晰地组织对话内容，确保对话的逻辑性和可读性。
+
+            ChatML 的基本结构：
+                <conversation>: 表示整个对话的容器。
+                <message>: 表示一条消息，通常包含 role 属性来区分消息的发送者（如 user 或 assistant）。
+                <text>: 包含消息的具体文本内容。
+                <metadata>: 可以包含对话的元数据，如时间戳、用户ID等。
+                <action>: 可以定义对话中的操作或指令，如调用API、跳转等。
+
+            除了ChatML，还有其他一些用于结构化聊天内容的标记语言或格式。以下是一些常见的结构化聊天内容标记语言或格式：
+
+            1. Chatito： Chatito 是一种用于生成训练数据的标记语言，主要用于构建自然语言理解（NLU）模型的训练数据集。它支持定义意图、实体和对话流。
+                %[greet]
+                    ~[hi]
+                    ~[hello]
+                    ~[hey]
+                ~[hi]
+                    hi
+                    hello there
+                    hey
+                ~[hello]
+                    hello
+                    hi
+                    hey there
+            2. Rasa NLU Training Data Format： Rasa NLU 是一个用于构建自然语言理解（NLU）模型的开源工具。它使用一种特定的训练数据格式来定义意图、实体和对话流。
+                version: "3.0"
+                nlu:
+                - intent: greet
+                    examples: |
+                    - 你好
+                    - 早上好
+                    - 嗨
+                - intent: goodbye
+                    examples: |
+                    - 再见
+                    - 拜拜
+                    - 下次见
+            3. Dialogflow Agent： Dialogflow 是一个用于构建聊天机器人的平台。它使用一种特定的代理格式来定义意图、实体和对话流。
+            4. OpenAI Chat Completion Format (JSON)：OpenAI 的 GPT 模型使用 JSON 格式来定义对话内容，通常用于 API 调用。每条消息包含 role（角色）和 content（内容）
+                {
+                    "messages": [
+                        {"role": "system", "content": "你是一个有帮助的助手。"},
+                        {"role": "user", "content": "今天的天气怎么样？"},
+                        {"role": "assistant", "content": "今天的天气晴朗，气温在20到25摄氏度之间。"}
+                    ]
+                }
+            
+            5. Markdown with Metadata：一些聊天机器人框架支持使用 Markdown 格式，并结合元数据（如 YAML 或 JSON）来定义对话内容。
+                ---
+                role: user
+                timestamp: 2023-10-05T14:30:00Z
+                ---
+                你好，我想订一张机票。
+
+            ChatML：适合自定义对话结构。
+            Rasa/Dialogflow：适合 NLU 和对话管理。
+            AIML：适合基于规则的聊天机器人。
+            JSON/YAML：适合 API 驱动的对话系统。
+        """
         messages = []
         for i, turn in enumerate(conversations):
             role = 'user' if i % 2 == 0 else 'assistant'
@@ -151,6 +212,17 @@ class DPODataset(Dataset):
         self.padding = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
         self.bos_id = tokenizer('<s>assistant\n', add_special_tokens=False).input_ids
         self.eos_id = tokenizer('</s>\n', add_special_tokens=False).input_ids
+
+        """
+            一份数据分俩条
+            chosen：用户选择的对话
+                ['role': 'user, 'content': '']
+                ['role': 'system', 'content': '']
+            rejected：用户拒绝的对话
+                ['role': 'user, 'content': '']
+                ['role': 'system', 'content': '']
+
+        """
         with open(file_path, 'r', encoding='utf-8') as f:
             self.data = []
             for line in f:
